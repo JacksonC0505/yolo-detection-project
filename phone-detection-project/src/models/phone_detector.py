@@ -13,11 +13,18 @@ class PhoneDetector:
         """
         Detect phones in the frame and return a list of bounding boxes and confidences.
         """
+        # 检查输入格式
+        print("frame.shape:", frame.shape, "dtype:", frame.dtype)
+    
+        # 如果是4通道（如RGBA），转换为3通道（BGR）
+        if frame.shape[2] == 4:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
         results = self.model(frame)
         if not results or results[0].boxes.data.numel() == 0:  # Check if tensor is empty
             return []
 
         detections = results[0].boxes.data.cpu().numpy()
+        print("YOLO results:", detections)
         phones = []
 
         for detection in detections:
