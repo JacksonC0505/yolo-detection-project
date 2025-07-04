@@ -2,3 +2,4 @@ numpy==1.24.3
 opencv-python==4.8.1.78
 ultralytics==8.0.196
 opencv-python-headless==4.10.0.84
+ncnn==1.0.20250503
