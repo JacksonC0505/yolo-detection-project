@@ -18,7 +18,7 @@ class Object:
         self.label = 0
         self.prob = 0.0
 
-class PhoneDetector:
+class YoloDetNCNN:
     def __init__(self):
         if not HAVE_NCNN:
             self.net = None
@@ -27,15 +27,11 @@ class PhoneDetector:
         self.net = ncnn.Net()
         self.net.opt.use_vulkan_compute = False
         self.target_size = 320
-        self.prob_threshold = 0.60
-        self.nms_threshold = 0.60
+        self.prob_threshold = 0.40
+        self.nms_threshold = 0.40
         
-        # Phone detection specific
-        self.phone_class_id = 67  # COCO class ID for cell phone
-        self.phone_confidence_threshold = 0.2
-
-    def load_model(self, param_path='model/v5lite-i8e.param', bin_path='model/v5lite-i8e.bin'):
-        """Load the v5lite NCNN model"""
+    def init(self, param_path, bin_path):
+        """Initialize the YOLO model with NCNN param and bin files"""
         if not HAVE_NCNN:
             print("NCNN Python binding not installed")
             return False
@@ -50,7 +46,7 @@ class PhoneDetector:
                 
             self.net.load_param(param_path)
             self.net.load_model(bin_path)
-            print(f"v5lite NCNN model loaded from {param_path} and {bin_path}")
+            print(f"NCNN model loaded from {param_path} and {bin_path}")
             return True
         except Exception as e:
             print(f"Error loading NCNN model: {e}")
@@ -160,34 +156,8 @@ class PhoneDetector:
 
         return [objects[i] for i in picked]
 
-    def detect_phone(self, frame):
-        """
-        Detect phones in the frame and return a list of bounding boxes and confidences.
-        """
-        if not HAVE_NCNN:
-            print("NCNN Python binding not installed")
-            return []
-            
-        if self.net is None:
-            print("Model not loaded. Call load_model() first.")
-            return []
-        
-        # Get all detections
-        all_detections = []
-        self._detect_all_objects(frame, all_detections)
-        
-        # Filter for phones only
-        phones = []
-        for detection in all_detections:
-            if detection['cate'] == self.phone_class_id and detection['score'] >= self.phone_confidence_threshold:
-                phone_box = (detection['x1'], detection['y1'], detection['x2'], detection['y2'])
-                phones.append((phone_box, detection['score']))
-        
-        print(f"Found {len(all_detections)} total detections, {len(phones)} phones")
-        return phones
-
-    def _detect_all_objects(self, frame, output_list):
-        """Internal method to detect all objects using YOLOv5 processing pipeline"""
+    def detect(self, frame, output_list):
+        """Detect objects using YOLOv5 processing pipeline"""
         output_list.clear()
         
         if self.net is None:
@@ -198,7 +168,7 @@ class PhoneDetector:
             img_w = frame.shape[1]
             img_h = frame.shape[0]
 
-            # Letterbox resize - same as test.py
+            # Letterbox resize - same as C++ code
             w = img_w
             h = img_h
             scale = 1.0
@@ -227,7 +197,7 @@ class PhoneDetector:
                                 ncnn.BorderType.BORDER_CONSTANT, 114.0)
 
             # Normalize
-            mean_vals = [0.0, 0.0, 0.0]
+            mean_vals = [0.0, 0.0, 0.0]  # 修改：确保是float类型
             norm_vals = [1/255.0, 1/255.0, 1/255.0]
             in_pad.substract_mean_normalize(mean_vals, norm_vals)
 
@@ -294,36 +264,108 @@ class PhoneDetector:
                 }
                 output_list.append(target_box)
 
+            print(f"Final detections: {len(output_list)}")
+            for box in output_list:
+                print(f"Detection: class={box['cate']}, score={box['score']:.2f}, box=({box['x1']},{box['y1']},{box['x2']},{box['y2']})")
+
         except Exception as e:
             print(f"NCNN detection error: {e}")
             import traceback
             traceback.print_exc()
 
-    def draw_detections(self, frame, phone_boxes):
-        """Draw phone detection boxes on the frame"""
-        for (x1, y1, x2, y2), confidence in phone_boxes:
-            # Draw rectangle
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            
-            # Draw label
-            label = f"Phone: {confidence:.2f}"
-            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
-            
-            # Draw label background
-            cv2.rectangle(frame, (x1, y1 - label_size[1] - 10), 
-                         (x1 + label_size[0], y1), (0, 255, 0), -1)
-            
-            # Draw label text
-            cv2.putText(frame, label, (x1, y1 - 5), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-
-    def calculate_size(self, phone_box, pixels_per_cm):
-        """Calculate actual phone size using calibration data"""
-        x1, y1, x2, y2 = phone_box
-        pixel_width = x2 - x1
-        pixel_height = y2 - y1
+def draw_boxes(src_img, boxes):
+    """Draw detection boxes on the image"""
+    class_names = [
+        "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light",
+        "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
+        "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
+        "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard",
+        "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+        "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch",
+        "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone",
+        "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
+        "hair drier", "toothbrush"
+    ]
+    
+    print(f"Detect box num: {len(boxes)}")
+    
+    for box in boxes:
+        # Draw rectangle
+        cv2.rectangle(src_img, 
+                     (box['x1'], box['y1']), 
+                     (box['x2'], box['y2']), 
+                     (0, 255, 0), 2)
         
-        width_cm = pixel_width / pixels_per_cm
-        height_cm = pixel_height / pixels_per_cm
+        # Draw label
+        class_name = class_names[box['cate']] if box['cate'] < len(class_names) else f"class_{box['cate']}"
+        label = f"{class_name}: {box['score']:.1%}"
+        
+        label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+        
+        # Draw label background
+        cv2.rectangle(src_img, (box['x1'], box['y1'] - label_size[1] - 10), 
+                     (box['x1'] + label_size[0], box['y1']), (0, 255, 0), -1)
+        
+        # Draw label text
+        cv2.putText(src_img, label, (box['x1'], box['y1'] - 5), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+    
+    return 0
 
-        return width_cm, height_cm
+def test_cam():
+    """Test camera detection with NCNN"""
+    if not HAVE_NCNN:
+        print("Please install NCNN Python binding first: pip install ncnn")
+        return -1
+        
+    api = YoloDetNCNN()
+    
+    # Initialize model
+    success = api.init("model/v5lite-i8e.param", 
+                      "model/v5lite-i8e.bin")
+    
+    if not success:
+        print("Failed to load model. Exiting.")
+        return -1
+    
+    output = []
+    cap = cv2.VideoCapture(0)
+    
+    if not cap.isOpened():
+        print("Error: Could not open camera")
+        return -1
+    
+    try:
+        while True:
+            print("=========================")
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                print("Failed to read frame")
+                break
+            
+            start_time = time.time()
+            api.detect(frame, output)
+            end_time = time.time()
+            detect_time = (end_time - start_time) * 1000
+            print(f"Detect Time: {detect_time:.2f} ms")
+            
+            draw_boxes(frame, output)
+            output.clear()
+            
+            cv2.imshow("NCNN Demo", frame)
+            
+            if cv2.waitKey(20) & 0xFF == ord('q'):
+                break
+                
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+    
+    return 0
+
+def main():
+    test_cam()
+    return 0
+
+if __name__ == "__main__":
+    main()
